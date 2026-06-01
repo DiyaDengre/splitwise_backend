@@ -36,55 +36,36 @@ public class ExpenseService {
         User user = userRepository.findById(request.getPaidByUserId()).orElse(null);
         ExpenseGroup group = groupRepository.findById(request.getGroupId()).orElse(null);
 
-        if (user == null) {
-            throw new RuntimeException("User not found");
-        }
-
-        if (group == null) {
-            throw new RuntimeException("Group not found");
-        }
+        if (user == null) throw new RuntimeException("User not found");
+        if (group == null) throw new RuntimeException("Group not found");
 
         boolean payerInGroup = group.getMembers().stream()
                 .anyMatch(m -> m.getId().equals(user.getId()));
-
-        if (!payerInGroup) {
-            throw new RuntimeException("Payer group ka member nahi hai");
-        }
+        if (!payerInGroup) throw new RuntimeException("Payer is not a group member");
 
         Expense expense = new Expense();
         expense.setDescription(request.getDescription());
         expense.setAmount(request.getAmount());
         expense.setPaidBy(user);
         expense.setGroup(group);
-
         Expense savedExpense = expenseRepository.save(expense);
 
         String splitType = request.getSplitType();
 
         if ("CUSTOM".equalsIgnoreCase(splitType)) {
 
-            if (request.getSplits() == null || request.getSplits().isEmpty()) {
-                throw new RuntimeException("Custom split ke liye splits list do");
-            }
+            if (request.getSplits() == null || request.getSplits().isEmpty())
+                throw new RuntimeException("Custom split needs splits list");
 
             double totalSplit = request.getSplits().stream()
-                    .mapToDouble(SplitRequestDTO::getAmount)
-                    .sum();
+                    .mapToDouble(SplitRequestDTO::getAmount).sum();
 
-            if (Math.abs(totalSplit - request.getAmount()) > 0.01) {
-                throw new RuntimeException(
-                        "Split amounts total se match nahi karte. Expected: "
-                                + request.getAmount() + ", Got: " + totalSplit
-                );
-            }
+            if (Math.abs(totalSplit - request.getAmount()) > 0.01)
+                throw new RuntimeException("Split amounts don't add up to total");
 
             for (SplitRequestDTO splitRequest : request.getSplits()) {
-
                 User splitUser = userRepository.findById(splitRequest.getUserId()).orElse(null);
-
-                if (splitUser == null) continue;
-
-                if (splitUser.getId().equals(user.getId())) continue;
+                if (splitUser == null || splitUser.getId().equals(user.getId())) continue;
 
                 ExpenseSplit split = new ExpenseSplit();
                 split.setExpense(savedExpense);
@@ -93,22 +74,16 @@ public class ExpenseService {
                 expenseSplitRepository.save(split);
             }
 
-            return savedExpense;
-
         } else if ("EQUAL".equalsIgnoreCase(splitType)) {
 
             long nonPayerCount = group.getMembers().stream()
-                    .filter(m -> !m.getId().equals(user.getId()))
-                    .count();
+                    .filter(m -> !m.getId().equals(user.getId())).count();
 
-            if (nonPayerCount <= 0) {
-                throw new RuntimeException("No members to split with");
-            }
+            if (nonPayerCount <= 0) throw new RuntimeException("No members to split with");
 
             double splitAmount = request.getAmount() / nonPayerCount;
 
             for (User member : group.getMembers()) {
-
                 if (member.getId().equals(user.getId())) continue;
 
                 ExpenseSplit split = new ExpenseSplit();
@@ -118,11 +93,11 @@ public class ExpenseService {
                 expenseSplitRepository.save(split);
             }
 
-            return savedExpense;
-
         } else {
-            throw new RuntimeException("splitType EQUAL ya CUSTOM hona chahiye");
+            throw new RuntimeException("splitType must be EQUAL or CUSTOM");
         }
+
+        return savedExpense;
     }
 
     public List<BalanceDTO> getBalances(Long groupId) {
@@ -136,7 +111,9 @@ public class ExpenseService {
             BalanceDTO dto = new BalanceDTO(
                     split.getUser().getName(),
                     split.getExpense().getPaidBy().getName(),
-                    split.getAmountOwed()
+                    split.getAmountOwed(),
+                    split.getId(),
+                    split.getExpense().getDescription()
             );
             balances.add(dto);
         }
@@ -147,7 +124,6 @@ public class ExpenseService {
     public ExpenseSplit settleExpense(Long splitId, Double paidAmount) {
 
         ExpenseSplit split = expenseSplitRepository.findById(splitId).orElse(null);
-
         if (split == null) return null;
 
         double remainingAmount = split.getAmountOwed() - paidAmount;
@@ -155,10 +131,10 @@ public class ExpenseService {
         if (remainingAmount <= 0) {
             split.setAmountOwed(0.0);
             split.setSettled(true);
-            return expenseSplitRepository.save(split);
+        } else {
+            split.setAmountOwed(remainingAmount);
         }
 
-        split.setAmountOwed(remainingAmount);
         return expenseSplitRepository.save(split);
     }
 
@@ -181,10 +157,7 @@ public class ExpenseService {
     public UserDashboardDTO getUserDashboard(Long userId) {
 
         User user = userRepository.findById(userId).orElse(null);
-
-        if (user == null) {
-            throw new RuntimeException("User not found");
-        }
+        if (user == null) throw new RuntimeException("User not found");
 
         double youOwe = 0.0;
         double youGet = 0.0;
@@ -193,19 +166,12 @@ public class ExpenseService {
         List<ExpenseSplit> getSplits = expenseSplitRepository.findByExpense_PaidBy_Id(userId);
 
         for (ExpenseSplit split : oweSplits) {
-            if (!split.getSettled()) {
-                youOwe += split.getAmountOwed();
-            }
+            if (!split.getSettled()) youOwe += split.getAmountOwed();
         }
-
         for (ExpenseSplit split : getSplits) {
-            if (!split.getSettled()) {
-                youGet += split.getAmountOwed();
-            }
+            if (!split.getSettled()) youGet += split.getAmountOwed();
         }
 
-        double totalBalance = youGet - youOwe;
-
-        return new UserDashboardDTO(totalBalance, youOwe, youGet);
+        return new UserDashboardDTO(youGet - youOwe, youOwe, youGet);
     }
 }
