@@ -50,8 +50,11 @@ public class ExpenseService {
 
             double totalSplit = request.getSplits().stream()
                     .mapToDouble(SplitRequestDTO::getAmount).sum();
-            if (Math.abs(totalSplit - request.getAmount()) > 0.01)
-                throw new RuntimeException("Split amounts don't add up to total");
+
+            // FIXED: only reject if split total EXCEEDS expense amount
+            // Payer can cover the remaining difference themselves
+            if (totalSplit > request.getAmount() + 0.01)
+                throw new RuntimeException("Split total cannot exceed expense amount");
 
             for (SplitRequestDTO s : request.getSplits()) {
                 User splitUser = userRepository.findById(s.getUserId()).orElse(null);
@@ -64,20 +67,23 @@ public class ExpenseService {
             }
 
         } else if ("EQUAL".equalsIgnoreCase(splitType)) {
-            // FIX: count only non-payer members, divide among them
+            // FIXED: divide among ALL members (including payer counts in total)
+            // Each person owes: totalAmount / totalMembers
+            // But we only save splits for NON-payers (payer already paid)
             List<User> nonPayers = new ArrayList<>();
             for (User m : group.getMembers()) {
                 if (!m.getId().equals(user.getId())) nonPayers.add(m);
             }
             if (nonPayers.isEmpty()) throw new RuntimeException("No members to split with");
 
-            double splitAmount = request.getAmount() / nonPayers.size();
+            int totalMembers = group.getMembers().size(); // includes payer
+            double splitAmount = request.getAmount() / totalMembers; // each person's share
 
             for (User member : nonPayers) {
                 ExpenseSplit split = new ExpenseSplit();
                 split.setExpense(saved);
                 split.setUser(member);
-                split.setAmountOwed(splitAmount);
+                split.setAmountOwed(splitAmount); // each non-payer owes this amount
                 expenseSplitRepository.save(split);
             }
 
@@ -98,7 +104,7 @@ public class ExpenseService {
                     split.getExpense().getPaidBy().getName(),
                     split.getAmountOwed(),
                     split.getId(),
-                    split.getUser().getId(),          // owesUserId — for frontend to compare with logged-in user
+                    split.getUser().getId(),
                     split.getExpense().getDescription()
             ));
         }
