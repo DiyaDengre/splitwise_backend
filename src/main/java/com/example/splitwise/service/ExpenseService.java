@@ -114,8 +114,16 @@ public class ExpenseService {
     public ExpenseSplit settleExpense(Long splitId, Double paidAmount) {
         ExpenseSplit split = expenseSplitRepository.findById(splitId).orElse(null);
         if (split == null) return null;
+
+        // FIX: cannot pay more than what is owed
+        if (paidAmount > split.getAmountOwed() + 0.01) {
+            throw new RuntimeException(
+                    "Payment amount ₹" + paidAmount + " exceeds amount owed ₹" + split.getAmountOwed()
+            );
+        }
+
         double remaining = split.getAmountOwed() - paidAmount;
-        if (remaining <= 0) {
+        if (remaining <= 0.01) {
             split.setAmountOwed(0.0);
             split.setSettled(true);
         } else {
